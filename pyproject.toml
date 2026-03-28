@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "delta-prune"
+version = "0.1.0"
+description = "LLM context contradiction detector and pruner — give your AI a sleep cycle"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "karesansui" },
+]
+keywords = ["llm", "context-rot", "contradiction", "pruning", "ai", "metabolism"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+ollama = ["ollama>=0.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/delta_prune"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
