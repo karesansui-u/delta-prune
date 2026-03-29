@@ -6,38 +6,17 @@ operates on in-memory claim pairs.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from delta_prune.extractor import Claim
 from delta_prune.llm import LLM
 from delta_prune.llm_parser import parse_json
+from delta_prune.prompts import get_prompt
 
-CONFLICT_PROMPT = """あなたは知識の整合性チェッカーです。
-必ず日本語で回答してください。
-
-以下の2つの主張が矛盾しているか判定してください。
-
-【主張 A】(発言 {turn_a})
-{claim_a}
-
-【主張 B】(発言 {turn_b})
-{claim_b}
-
-以下のJSON形式のみで回答してください。
-
-{{
-  "has_conflict": true | false,
-  "conflict_type": "直接矛盾 | 時間的変化 | 条件違い | 矛盾なし",
-  "summary": "矛盾の要約（1文）。矛盾なしの場合は null"
-}}
-
-【判定基準】
-- 直接矛盾: 同じ対象について、両立しない主張（例: 好き vs 嫌い、12人 vs 5000人）
-- 時間的変化: 同じ対象の状態が時間で変化（例: 独身 → 既婚）
-- 条件違い: 異なる条件下での異なる主張（矛盾ではない）
-- 矛盾なし: 異なるトピック、または両立する主張
-- テーマが無関係な場合は必ず「矛盾なし」とすること
-"""
+if TYPE_CHECKING:
+    from delta_prune.embedding import Embedding
 
 
 @dataclass
@@ -50,38 +29,95 @@ class Conflict:
     summary: str
 
 
-def detect_conflicts(claims: list[Claim], llm: LLM) -> list[Conflict]:
-    """Detect contradictions between all claim pairs.
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
-    Uses a simple O(n²) pairwise comparison. For typical conversation
-    lengths (<100 claims), this is fast enough.
+
+def filter_candidate_pairs(
+    claims: list[Claim],
+    embedding: Embedding,
+    threshold: float = 0.7,
+    max_pairs: int = 30,
+) -> list[tuple[int, int]]:
+    """Pre-filter claim pairs by embedding similarity.
+
+    Returns indices of claim pairs that exceed the similarity threshold,
+    sorted by similarity (highest first), capped at max_pairs.
     """
-    conflicts: list[Conflict] = []
+    texts = [c.text for c in claims]
+    vectors = embedding.encode(texts)
 
+    scored_pairs: list[tuple[float, int, int]] = []
     for i in range(len(claims)):
         for j in range(i + 1, len(claims)):
-            a, b = claims[i], claims[j]
+            sim = _cosine_similarity(vectors[i], vectors[j])
+            if sim >= threshold:
+                scored_pairs.append((sim, i, j))
 
-            prompt = CONFLICT_PROMPT.format(
-                turn_a=a.source_turn,
-                claim_a=a.text,
-                turn_b=b.source_turn,
-                claim_b=b.text,
+    scored_pairs.sort(reverse=True)
+    return [(i, j) for _, i, j in scored_pairs[:max_pairs]]
+
+
+def detect_conflicts(
+    claims: list[Claim],
+    llm: LLM,
+    locale: str = "en",
+    embedding: Embedding | None = None,
+    similarity_threshold: float = 0.7,
+    max_llm_pairs: int = 30,
+) -> list[Conflict]:
+    """Detect contradictions between claims.
+
+    If embedding is provided, pre-filters pairs by cosine similarity
+    to reduce LLM calls. Otherwise falls back to O(n²) pairwise comparison.
+    """
+    n = len(claims)
+    prompt_template = get_prompt(locale, "conflict")
+
+    if embedding is not None:
+        pairs = filter_candidate_pairs(claims, embedding, similarity_threshold, max_llm_pairs)
+    else:
+        total_pairs = n * (n - 1) // 2
+        if total_pairs > 100:
+            warnings.warn(
+                f"No embedding provided: checking {total_pairs} claim pairs via LLM (O(n²)). "
+                f"Consider using an embedding for conversations with >20 claims. "
+                f"Install with: pip install delta-prune[fast]",
+                stacklevel=2,
             )
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
 
-            output = llm.generate(prompt)
-            if not output:
-                continue
+    conflicts: list[Conflict] = []
 
-            parsed = parse_json(output)
-            if not parsed.get("has_conflict"):
-                continue
+    for i, j in pairs:
+        a, b = claims[i], claims[j]
 
-            conflicts.append(Conflict(
-                claim_a=a,
-                claim_b=b,
-                conflict_type=parsed.get("conflict_type", "直接矛盾"),
-                summary=parsed.get("summary", ""),
-            ))
+        prompt = prompt_template.format(
+            turn_a=a.source_turn,
+            claim_a=a.text,
+            turn_b=b.source_turn,
+            claim_b=b.text,
+        )
+
+        output = llm.generate(prompt)
+        if not output:
+            continue
+
+        parsed = parse_json(output)
+        if not parsed.get("has_conflict"):
+            continue
+
+        conflicts.append(Conflict(
+            claim_a=a,
+            claim_b=b,
+            conflict_type=parsed.get("conflict_type", "direct_contradiction"),
+            summary=parsed.get("summary", ""),
+        ))
 
     return conflicts

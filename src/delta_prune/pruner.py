@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from delta_prune.extractor import Claim, extract_claims
 from delta_prune.llm import LLM
 from delta_prune.resolver import Conflict, detect_conflicts
+
+if TYPE_CHECKING:
+    from delta_prune.embedding import Embedding
 
 
 @dataclass
@@ -38,21 +42,33 @@ class DeltaPrune:
         llm: LLM,
         strategy: str = "annotate",
         extract_roles: tuple[str, ...] = ("user",),
+        locale: str = "en",
+        embedding: Embedding | None = None,
+        similarity_threshold: float = 0.7,
+        max_llm_pairs: int = 30,
     ) -> None:
         """
         Args:
             llm: LLM adapter for extraction and conflict detection
             strategy: "prune" (remove old), "annotate" (add context), "report" (detect only)
             extract_roles: which message roles to extract claims from
+            locale: "en" (default) or "ja" — controls prompt language
+            embedding: optional embedding adapter for fast pre-filtering
+            similarity_threshold: cosine similarity threshold for pre-filter (0.0-1.0)
+            max_llm_pairs: maximum number of pairs to send to LLM for conflict check
         """
         self._llm = llm
         self._strategy = strategy
         self._extract_roles = extract_roles
+        self._locale = locale
+        self._embedding = embedding
+        self._similarity_threshold = similarity_threshold
+        self._max_llm_pairs = max_llm_pairs
 
     def __call__(self, messages: list[dict[str, str]]) -> PruneResult:
         """Analyze and clean a message list."""
         # Step 1: Extract claims from all messages
-        claims = extract_claims(messages, self._llm, self._extract_roles)
+        claims = extract_claims(messages, self._llm, self._extract_roles, self._locale)
 
         if len(claims) < 2:
             return PruneResult(
@@ -63,7 +79,14 @@ class DeltaPrune:
             )
 
         # Step 2: Detect contradictions
-        conflicts = detect_conflicts(claims, self._llm)
+        conflicts = detect_conflicts(
+            claims,
+            self._llm,
+            locale=self._locale,
+            embedding=self._embedding,
+            similarity_threshold=self._similarity_threshold,
+            max_llm_pairs=self._max_llm_pairs,
+        )
 
         # Step 3: Calculate delta (contradiction density)
         delta = len(conflicts) / len(claims) if claims else 0.0
@@ -115,6 +138,49 @@ class DeltaPrune:
         conflicts: list[Conflict],
     ) -> list[dict[str, str]]:
         """Add a system message summarizing detected contradictions."""
+        if self._locale == "ja":
+            return self._annotate_ja(messages, conflicts)
+        return self._annotate_en(messages, conflicts)
+
+    def _annotate_en(
+        self,
+        messages: list[dict[str, str]],
+        conflicts: list[Conflict],
+    ) -> list[dict[str, str]]:
+        annotations: list[str] = []
+        for conflict in conflicts:
+            older = min(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+            newer = max(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+            annotations.append(
+                f"- {conflict.conflict_type}: "
+                f"message {older.source_turn} \"{older.text}\" → "
+                f"message {newer.source_turn} \"{newer.text}\""
+            )
+
+        annotation_msg = {
+            "role": "system",
+            "content": (
+                "[Context consistency check]\n"
+                "The following contradictions were detected. Prioritize the latest information:\n"
+                + "\n".join(annotations)
+            ),
+        }
+
+        result = list(messages)
+        last_user_idx = len(result) - 1
+        for i in range(len(result) - 1, -1, -1):
+            if result[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        result.insert(last_user_idx, annotation_msg)
+        return result
+
+    def _annotate_ja(
+        self,
+        messages: list[dict[str, str]],
+        conflicts: list[Conflict],
+    ) -> list[dict[str, str]]:
         annotations: list[str] = []
         for conflict in conflicts:
             older = min(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
@@ -134,7 +200,6 @@ class DeltaPrune:
             ),
         }
 
-        # Insert annotation before the last user message
         result = list(messages)
         last_user_idx = len(result) - 1
         for i in range(len(result) - 1, -1, -1):

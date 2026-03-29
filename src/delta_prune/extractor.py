@@ -10,29 +10,7 @@ from dataclasses import dataclass
 
 from delta_prune.llm import LLM
 from delta_prune.llm_parser import parse_json_array
-
-EXTRACT_PROMPT = """あなたは情報の分類者です。
-必ず日本語で回答してください。
-
-以下のメッセージから、事実・ルール・好み・属性を **1つずつ個別に** 抽出してください。
-JSON配列のみで回答してください。
-
-【メッセージ】
-{text}
-
-[
-  {{
-    "claim": "抽出した事実やルール（1文）",
-    "type": "fact | rule | preference",
-    "reasoning": "なぜ重要か（1文）"
-  }}
-]
-
-【ルール】
-- 1つのclaimに複数の事実を含めないこと
-- 挨拶・雑談・メタ情報は抽出しない（空配列 [] を返す）
-- メッセージに抽出すべき情報がなければ空配列 [] を返す
-"""
+from delta_prune.prompts import get_prompt
 
 
 @dataclass
@@ -49,6 +27,7 @@ def extract_claims(
     messages: list[dict[str, str]],
     llm: LLM,
     roles: tuple[str, ...] = ("user",),
+    locale: str = "en",
 ) -> list[Claim]:
     """Extract all factual claims from a list of messages.
 
@@ -56,11 +35,13 @@ def extract_claims(
         messages: OpenAI-format messages [{"role": "user", "content": "..."}]
         llm: LLM adapter for extraction
         roles: which roles to extract from (default: user only)
+        locale: "en" or "ja"
 
     Returns:
         List of Claims with source_turn metadata
     """
     claims: list[Claim] = []
+    prompt_template = get_prompt(locale, "extract")
 
     for i, msg in enumerate(messages):
         role = msg.get("role", "")
@@ -69,7 +50,7 @@ def extract_claims(
         if role not in roles or not content.strip():
             continue
 
-        prompt = EXTRACT_PROMPT.format(text=content)
+        prompt = prompt_template.format(text=content)
         output = llm.generate(prompt)
         if not output:
             continue
