@@ -62,7 +62,15 @@ prune = DeltaPrune(llm=ClaudeCLI(), locale="ja")  # Japanese
 ```
 
 **Implementation**:
-- Create `prompts.py` with EXTRACT_PROMPT_EN, EXTRACT_PROMPT_JA, CONFLICT_PROMPT_EN, CONFLICT_PROMPT_JA
+- Create `prompts.py` with dict-based lookup structure:
+  ```python
+  PROMPTS = {
+      "en": {"extract": EXTRACT_PROMPT_EN, "conflict": CONFLICT_PROMPT_EN},
+      "ja": {"extract": EXTRACT_PROMPT_JA, "conflict": CONFLICT_PROMPT_JA},
+  }
+  def get_prompt(locale: str, kind: str) -> str:
+      return PROMPTS[locale][kind]
+  ```
 - Extractor and Resolver accept `locale` parameter
 - DeltaPrune passes `locale` through
 
@@ -81,6 +89,8 @@ After (O(n²) embedding + O(k) LLM):
 
 Embedding is ~1000x faster and ~1000x cheaper than LLM calls. With a similarity threshold, we can reduce LLM calls from n² to ~10-30 regardless of n.
 
+**Alternative considered**: Topic tagging at extraction time (LLM assigns topic labels → only compare within same topic). This achieves O(Σ(g_i²)) where g_i is group size. Embedding approach is simpler and achieves the same effect in vector space without requiring an additional LLM output field.
+
 **Files to change**:
 - `src/delta_prune/resolver.py` — add embedding pre-filter
 - `src/delta_prune/embedding.py` — new file, embedding adapters
@@ -98,7 +108,12 @@ class DeltaPrune:
         llm: LLM,
         embedding: Embedding | None = None,  # Optional: enables fast pre-filter
         similarity_threshold: float = 0.7,   # Only LLM-check pairs above this
+        # Note: 0.7 cosine similarity ≈ 0.3 cosine distance. DeltaZero uses
+        # SEARCH_DISTANCE_THRESHOLD=0.85 (distance), which is more permissive.
+        # Calibration against DeltaZero's benchmark data is future work.
         max_llm_pairs: int = 30,             # Hard cap on LLM calls
+        # Based on DeltaZero data: 180-turn sessions produce ~50-100 claims,
+        # of which ~5-15 are contradictory pairs. 30 is 2-3x headroom.
         ...
     )
 ```
@@ -159,6 +174,11 @@ Users can't `pip install delta-prune`. The paper links to GitHub but installatio
    - Test that pre-filter reduces pair count
    - Test that O(n²) fallback still works
 6. Update README with `pip install delta-prune[fast]`
+
+### Known performance issue: ClaudeCLI subprocess overhead
+ClaudeCLI calls `subprocess.run(["claude", "-p", ...])` per LLM call. Each call has ~2-3s process startup overhead. 20 messages × extract = 40-60s just for extraction. **Batch extraction** (multiple messages in one LLM call) would reduce this to ~5s total.
+
+This is tracked as future work for v0.3.0. For v0.2.0, the embedding pre-filter (Phase 2) mitigates the resolver side, but extraction remains 1-call-per-message.
 
 ### Phase 3: PyPI publish (30 min)
 1. Bump version to 0.2.0 in pyproject.toml
@@ -239,6 +259,17 @@ result.has_conflicts # bool
 | test_embedding_filter | Unit (FakeEmb) | Pre-filter reduces pairs | **NEW** |
 | test_embedding_fallback | Unit (FakeLLM) | No embedding → O(n²) works | **NEW** |
 | test_max_llm_pairs | Unit (FakeEmb) | Hard cap is respected | **NEW** |
+| test_integration_ollama | Integration | Real LLM parses correctly | **NEW** |
+
+### Integration tests
+Marked with `@pytest.mark.integration`. Skipped in CI (no GPU/model). Run locally with:
+```bash
+pytest tests/ -v -m integration  # requires ollama with a model running
+```
+One test using `OllamaLLM("gemma3:12b")` or similar small model to verify:
+- LLM output is parseable JSON
+- Extract returns non-empty claims for factual input
+- Conflict detection returns correct structure
 
 ---
 
