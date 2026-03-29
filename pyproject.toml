@@ -7,7 +7,7 @@ name = "delta-prune"
 version = "0.1.0"
 description = "LLM context contradiction detector and pruner — give your AI a sleep cycle"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "karesansui" },
