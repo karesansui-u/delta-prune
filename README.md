@@ -177,10 +177,31 @@ Based on research showing that **context rot is caused by contradiction accumula
 
 Reproducible **baseline vs `filter_chunks`** accuracy on a small English task set (misleading chunk first). See [`benchmarks/README.md`](benchmarks/README.md).
 
+**From a git checkout** (recommended):
+
 ```bash
 pip install -e ".[ollama]"
 python benchmarks/run_benchmark.py --backend ollama --model qwen2.5:14b --out results/run.json
 ```
+
+### PyPI: wheel vs source distribution (sdist)
+
+| Artifact | What you get |
+|----------|----------------|
+| **Wheel** (default `pip install delta-prune`) | Only the importable package under `site-packages`. **No `benchmarks/` tree** — you cannot run `benchmarks/run_benchmark.py` from that install alone. |
+| **sdist** (`.tar.gz` on [PyPI](https://pypi.org/project/delta-prune/#files)) | Full project source as shipped by the release: **`benchmarks/`**, **`tests/`**, docs, and `pyproject.toml`. Use this if you want the harness without cloning Git. |
+
+**Run the benchmark from a downloaded sdist** (example):
+
+```bash
+pip download delta-prune --no-binary delta-prune -d /tmp/dp
+tar -xzf /tmp/dp/delta_prune-*.tar.gz -C /tmp/dp
+cd /tmp/dp/delta_prune-*
+pip install -e ".[ollama]"
+python benchmarks/run_benchmark.py --backend ollama --model qwen2.5:14b
+```
+
+Alternatively clone [the repository](https://github.com/karesansui-u/delta-prune); behavior is the same as extracting the sdist.
 
 ## Publishing (maintainers)
 

@@ -1,5 +1,7 @@
 # delta-prune contradiction benchmark (RAG-style)
 
+**PyPI note:** a normal `pip install delta-prune` installs only the **wheel** (library code). The **`benchmarks/`** directory ships in the **source distribution (sdist)** on PyPI and in git — see the main [README](../README.md) section *PyPI: wheel vs source distribution*.
+
 Measures **answer accuracy** when retrieved chunks contain a **leading misleading** passage plus **correct** passages, comparing:
 
 1. **Baseline** — all chunks concatenated (contradictions present).
