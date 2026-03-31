@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from delta_prune import DeltaPrune, Claim
+from delta_prune import ChunkPruneResult, DeltaPrune, Claim
 from delta_prune.resolver import filter_candidate_pairs
 
 
@@ -295,6 +295,82 @@ def test_max_llm_pairs():
     pairs = filter_candidate_pairs(claims, embedding, threshold=0.5, max_pairs=5)
 
     assert len(pairs) <= 5
+
+
+def test_filter_chunks_no_conflict():
+    """RAG chunks without contradictions pass through."""
+    llm = FakeLLM()
+    prune = DeltaPrune(llm=llm, locale="ja", strategy="report")
+
+    chunks = [
+        "私は東京都渋谷区に住んでいます。",
+        "通勤は電車です。",
+    ]
+    result = prune.filter_chunks(chunks)
+    assert isinstance(result, ChunkPruneResult)
+    assert not result.has_conflicts
+    assert result.filtered_chunks == chunks
+
+
+def test_filter_chunks_detect_and_prune():
+    """RAG mode: prune drops the older conflicting chunk."""
+    llm = FakeLLM()
+    prune = DeltaPrune(llm=llm, strategy="prune", locale="ja")
+
+    chunks = [
+        "好きな食べ物はカレーです。",
+        "カレーは嫌いです。ラーメンが好きです。",
+    ]
+    result = prune.filter_chunks(chunks)
+    assert result.has_conflicts
+    assert len(result.filtered_chunks) == 1
+    assert "ラーメン" in result.filtered_chunks[0]
+
+
+def test_filter_chunks_annotate_prepends():
+    """RAG annotate prepends a single warning chunk."""
+    llm = FakeLLM()
+    prune = DeltaPrune(llm=llm, strategy="annotate", locale="ja")
+
+    chunks = [
+        "好きな食べ物はカレーです。",
+        "カレーは嫌いです。ラーメンが好きです。",
+    ]
+    result = prune.filter_chunks(chunks)
+    assert result.has_conflicts
+    assert len(result.filtered_chunks) == len(chunks) + 1
+    assert "RAG" in result.filtered_chunks[0] or "矛盾" in result.filtered_chunks[0]
+    assert result.filtered_chunks[1:] == chunks
+
+
+def test_filter_chunks_empty_and_sparse():
+    """Empty chunk strings are ignored for pairing but kept in output."""
+    llm = FakeLLM()
+    prune = DeltaPrune(llm=llm, strategy="prune", locale="ja")
+
+    chunks = [
+        "好きな食べ物はカレーです。",
+        "",
+        "カレーは嫌いです。ラーメンが好きです。",
+    ]
+    result = prune.filter_chunks(chunks)
+    assert result.has_conflicts
+    # index 0 removed; index 1 empty kept; index 2 kept
+    assert result.filtered_chunks == ["", "カレーは嫌いです。ラーメンが好きです。"]
+
+
+def test_filter_chunks_english():
+    """English locale for chunk filtering."""
+    llm = FakeLLM()
+    prune = DeltaPrune(llm=llm, strategy="report", locale="en")
+
+    chunks = [
+        "My favorite food is curry.",
+        "I hate curry. I like ramen.",
+    ]
+    result = prune.filter_chunks(chunks)
+    assert result.has_conflicts
+    assert result.filtered_chunks == chunks
 
 
 def test_embedding_with_prune():

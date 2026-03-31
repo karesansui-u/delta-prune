@@ -27,6 +27,37 @@ class PruneResult:
         return len(self.conflicts) > 0
 
 
+@dataclass
+class ChunkPruneResult:
+    """Result of RAG chunk filtering (`filter_chunks`)."""
+
+    filtered_chunks: list[str]
+    conflicts: list[Conflict]
+    claims: list[Claim]
+    delta: float
+
+    @property
+    def has_conflicts(self) -> bool:
+        return len(self.conflicts) > 0
+
+
+def _chunks_to_claims(chunks: list[str]) -> list[Claim]:
+    """One claim per non-empty chunk; source_turn is the chunk index."""
+    claims: list[Claim] = []
+    for i, text in enumerate(chunks):
+        if not text or not text.strip():
+            continue
+        claims.append(
+            Claim(
+                text=text.strip(),
+                type="rag_chunk",
+                source_turn=i,
+                role="user",
+            )
+        )
+    return claims
+
+
 class DeltaPrune:
     """LLM context contradiction detector and pruner.
 
@@ -113,6 +144,117 @@ class DeltaPrune:
             claims=claims,
             delta=delta,
         )
+
+    def filter_chunks(self, chunks: list[str]) -> ChunkPruneResult:
+        """Detect contradictions across RAG retrieval chunks and filter or annotate.
+
+        Each non-empty chunk is treated as one factual unit (no per-chunk extraction LLM).
+        Uses the same conflict detection and strategies as chat mode: ``prune`` removes
+        chunks that hold the older side of a contradiction; ``annotate`` prepends a
+        consistency note chunk; ``report`` returns the original list unchanged.
+
+        Chunk order is preserved except for removals. Empty strings are kept but do not
+        participate in pairwise checks.
+        """
+        if not chunks:
+            return ChunkPruneResult(
+                filtered_chunks=[],
+                conflicts=[],
+                claims=[],
+                delta=0.0,
+            )
+
+        claims = _chunks_to_claims(chunks)
+
+        if len(claims) < 2:
+            return ChunkPruneResult(
+                filtered_chunks=list(chunks),
+                conflicts=[],
+                claims=claims,
+                delta=0.0,
+            )
+
+        conflicts = detect_conflicts(
+            claims,
+            self._llm,
+            locale=self._locale,
+            embedding=self._embedding,
+            similarity_threshold=self._similarity_threshold,
+            max_llm_pairs=self._max_llm_pairs,
+        )
+
+        delta = len(conflicts) / len(claims) if claims else 0.0
+
+        if not conflicts:
+            return ChunkPruneResult(
+                filtered_chunks=list(chunks),
+                conflicts=[],
+                claims=claims,
+                delta=delta,
+            )
+
+        if self._strategy == "prune":
+            filtered = self._apply_chunk_prune(chunks, conflicts)
+        elif self._strategy == "annotate":
+            filtered = self._apply_chunk_annotate(chunks, conflicts)
+        else:
+            filtered = list(chunks)
+
+        return ChunkPruneResult(
+            filtered_chunks=filtered,
+            conflicts=conflicts,
+            claims=claims,
+            delta=delta,
+        )
+
+    def _apply_chunk_prune(
+        self,
+        chunks: list[str],
+        conflicts: list[Conflict],
+    ) -> list[str]:
+        indices_to_remove: set[int] = set()
+        for conflict in conflicts:
+            older = min(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+            indices_to_remove.add(older.source_turn)
+        return [c for i, c in enumerate(chunks) if i not in indices_to_remove]
+
+    def _apply_chunk_annotate(
+        self,
+        chunks: list[str],
+        conflicts: list[Conflict],
+    ) -> list[str]:
+        if self._locale == "ja":
+            lines: list[str] = []
+            for conflict in conflicts:
+                older = min(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+                newer = max(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+                lines.append(
+                    f"- {conflict.conflict_type}: "
+                    f"チャンク{older.source_turn}「{older.text}」→ "
+                    f"チャンク{newer.source_turn}「{newer.text}」に変化"
+                )
+            header = (
+                "[RAGコンテキスト整合性チェック]\n"
+                "取得チャンク間で以下の矛盾が検出されました。後ろ（インデックスが大きい）のチャンクを優先してください。\n"
+                + "\n".join(lines)
+            )
+        else:
+            lines = []
+            for conflict in conflicts:
+                older = min(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+                newer = max(conflict.claim_a, conflict.claim_b, key=lambda c: c.source_turn)
+                lines.append(
+                    f"- {conflict.conflict_type}: "
+                    f"chunk {older.source_turn} \"{older.text}\" → "
+                    f"chunk {newer.source_turn} \"{newer.text}\""
+                )
+            header = (
+                "[RAG context consistency check]\n"
+                "Contradictions were detected between retrieved chunks. "
+                "Prioritize the later chunk (higher index):\n"
+                + "\n".join(lines)
+            )
+        return [header] + list(chunks)
 
     def _apply_prune(
         self,
