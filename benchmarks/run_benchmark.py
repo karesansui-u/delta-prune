@@ -93,6 +93,11 @@ def main() -> None:
                 "Misleading chunk is first (older index); prune removes it when "
                 "it contradicts later correct chunks."
             ),
+            "external_validity": (
+                "Index order here is authored to match prune semantics; real RAG "
+                "ranking is usually unrelated to truth/recency. Cite as controlled "
+                "ordering unless you add random-position or annotate-only conditions."
+            ),
         },
         "summary": summary,
         "tasks": [
