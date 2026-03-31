@@ -175,7 +175,7 @@ Based on research showing that **context rot is caused by contradiction accumula
 
 ## Benchmark (contradiction RAG)
 
-Reproducible **baseline vs `filter_chunks`** accuracy on a small English task set (misleading chunk first). See [`benchmarks/README.md`](benchmarks/README.md).
+Reproducible **baseline vs `filter_chunks`** accuracy on a small English task set. **Important:** tasks intentionally place the **misleading chunk first** so it aligns with `strategy=prune` (lower index = “older” = removed). Real RAG order is often **uncorrelated** with truth or recency — report numbers as **controlled-lab** results unless you extend the harness (see [`benchmarks/README.md`](benchmarks/README.md) *Assumptions & papers*).
 
 **From a git checkout** (recommended):
 
