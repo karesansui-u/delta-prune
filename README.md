@@ -173,6 +173,15 @@ Based on the [survival equation](https://doi.org/10.5281/zenodo.19322371): S = Î
 
 Based on research showing that **context rot is caused by contradiction accumulation, not context length**. Tested across 8 LLM models with statistically significant results (Kruskal-Wallis p=0.027, complete rank separation). See [DeltaZero](https://github.com/karesansui-u/delta-zero) for the full research.
 
+## Benchmark (contradiction RAG)
+
+Reproducible **baseline vs `filter_chunks`** accuracy on a small English task set (misleading chunk first). See [`benchmarks/README.md`](benchmarks/README.md).
+
+```bash
+pip install -e ".[ollama]"
+python benchmarks/run_benchmark.py --backend ollama --model qwen2.5:14b --out results/run.json
+```
+
 ## Publishing (maintainers)
 
 PyPI uploads run on **GitHub Actions** using the repo secret **`__TOKEN__`** (PyPI API token). See [`docs/RELEASE.md`](docs/RELEASE.md) for steps. **Coding agents:** see [`AGENTS.md`](AGENTS.md) for the same facts in agent-oriented form.

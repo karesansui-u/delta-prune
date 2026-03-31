@@ -20,4 +20,11 @@
 ## Local install / tests
 
 - Editable: `pip install -e ".[ollama]"` from repo root (or `[fast]`, `[openai]` as needed).
-- Tests: `pytest tests/test_pruner.py -k "not ollama"` (skip real Ollama integration unless intended).
+- Tests: `pytest tests/ -k "not ollama"` (skip real Ollama integration unless intended).
+
+## Contradiction RAG benchmark
+
+- **Purpose**: Compare **baseline** (misleading chunk + truth in context) vs **`filter_chunks`** on answer accuracy (gold substring heuristic).
+- **Docs**: [`benchmarks/README.md`](benchmarks/README.md)
+- **Run** (real LLM): `python benchmarks/run_benchmark.py --backend ollama --model <name>`
+- **Data**: [`benchmarks/data/tasks.json`](benchmarks/data/tasks.json) — misleading chunk is **first** so `strategy=prune` removes it when conflicts are detected.
